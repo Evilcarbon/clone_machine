@@ -1,0 +1,86 @@
+name: Clone Qwen Models
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'  # Runs daily at midnight UTC
+
+env:
+  HF_ORGANIZATION: Qwen
+  GH_USERNAME: evilcarbon
+  EMAIL: evilcarbon@hot.ail.com
+
+jobs:
+  clone-models:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install huggingface_hub
+          pip install GitPython
+
+      - name: Clone Qwen models
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python - <<EOF
+          import os
+          from huggingface_hub import HfApi
+          import git
+          from pathlib import Path
+
+          # Initialize Hugging Face API
+          api = HfApi()
+
+          # Get all models from the Qwen organization
+          models = api.list_models(author="Qwen")
+
+          # Create base directory for models
+          base_dir = Path("qwen_models")
+          base_dir.mkdir(exist_ok=True)
+
+          # Configure git
+          os.system(f'git config --global user.name "{os.environ["GH_USERNAME"]}"')
+          os.system(f'git config --global user.email "{os.environ["EMAIL"]}"')
+
+          # Clone each model
+          for model in models:
+              model_name = model.modelId.split('/')[-1]
+              print(f"Cloning {model_name}...")
+              
+              # Clone the model
+              repo_url = f"https://huggingface.co/Qwen/{model_name}"
+              local_path = base_dir / model_name
+              
+              if not local_path.exists():
+                  git.Repo.clone_from(repo_url, local_path)
+              
+              # Create GitHub repository if it doesn't exist
+              gh_repo_name = f"qwen-{model_name}"
+              os.system(f'gh repo create {gh_repo_name} --public --confirm || true')
+              
+              # Push to GitHub
+              repo = git.Repo(local_path)
+              remote_url = f"https://github.com/{os.environ['GH_USERNAME']}/{gh_repo_name}.git"
+              
+              # Add GitHub as remote and push
+              try:
+                  remote = repo.create_remote('github', remote_url)
+              except git.exc.GitCommandError:
+                  remote = repo.remote('github')
+              
+              remote.push('main')
+              print(f"Pushed {model_name} to GitHub")
+          EOF
+
+      - name: Cleanup
+        run: |
+          rm -rf qwen_models
