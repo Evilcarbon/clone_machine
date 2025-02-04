@@ -26,6 +26,8 @@ jobs:
         run: |
           pip install huggingface_hub
           pip install GitPython
+          pip install requests
+          gh auth login --with-token <<< "${{ secrets.PAT_TOKEN }}"
 
       - name: Clone Qwen models
         env:
@@ -33,54 +35,87 @@ jobs:
         run: |
           python - <<EOF
           import os
+          import sys
           from huggingface_hub import HfApi
           import git
           from pathlib import Path
+          import traceback
 
-          # Initialize Hugging Face API
-          api = HfApi()
+          def log_debug(message):
+              print(f"DEBUG: {message}", flush=True)
 
-          # Get all models from the Qwen organization
-          models = api.list_models(author="Qwen")
+          try:
+              log_debug("Starting the cloning process...")
+              
+              # Initialize Hugging Face API
+              api = HfApi()
+              log_debug("Initialized HF API")
 
-          # Create base directory for models
-          base_dir = Path("qwen_models")
-          base_dir.mkdir(exist_ok=True)
+              # Get all models from the Qwen organization
+              log_debug("Fetching models list from Qwen...")
+              models = api.list_models(author="Qwen")
+              log_debug(f"Found {len(list(models))} models")
 
-          # Configure git
-          os.system(f'git config --global user.name "{os.environ["GH_USERNAME"]}"')
-          os.system(f'git config --global user.email "{os.environ["EMAIL"]}"')
+              # Create base directory for models
+              base_dir = Path("qwen_models")
+              base_dir.mkdir(exist_ok=True)
+              log_debug(f"Created directory: {base_dir}")
 
-          # Clone each model
-          for model in models:
-              model_name = model.modelId.split('/')[-1]
-              print(f"Cloning {model_name}...")
-              
-              # Clone the model
-              repo_url = f"https://huggingface.co/Qwen/{model_name}"
-              local_path = base_dir / model_name
-              
-              if not local_path.exists():
-                  git.Repo.clone_from(repo_url, local_path)
-              
-              # Create GitHub repository if it doesn't exist
-              gh_repo_name = f"qwen-{model_name}"
-              os.system(f'gh repo create {gh_repo_name} --public --confirm || true')
-              
-              # Push to GitHub
-              repo = git.Repo(local_path)
-              remote_url = f"https://{os.environ['PAT_TOKEN']}@github.com/{os.environ['GH_USERNAME']}/{gh_repo_name}.git"
-              
-              # Add GitHub as remote and push
-              try:
-                  remote = repo.create_remote('github', remote_url)
-              except git.exc.GitCommandError:
-                  remote = repo.remote('github')
-              
-              remote.push('main')
-              print(f"Pushed {model_name} to GitHub")
+              # Configure git
+              os.system(f'git config --global user.name "{os.environ["GH_USERNAME"]}"')
+              os.system(f'git config --global user.email "{os.environ["EMAIL"]}"')
+              log_debug("Configured git user")
+
+              # Clone each model
+              for model in models:
+                  try:
+                      model_name = model.modelId.split('/')[-1]
+                      log_debug(f"\nProcessing model: {model_name}")
+                      
+                      # Clone the model
+                      repo_url = f"https://huggingface.co/Qwen/{model_name}"
+                      local_path = base_dir / model_name
+                      log_debug(f"Cloning from {repo_url} to {local_path}")
+                      
+                      if not local_path.exists():
+                          git.Repo.clone_from(repo_url, local_path)
+                      log_debug("Clone completed")
+                      
+                      # Create GitHub repository
+                      gh_repo_name = f"qwen-{model_name}"
+                      create_repo_cmd = f'gh repo create {gh_repo_name} --public --confirm || true'
+                      log_debug(f"Creating GitHub repo: {create_repo_cmd}")
+                      os.system(create_repo_cmd)
+                      
+                      # Push to GitHub
+                      repo = git.Repo(local_path)
+                      remote_url = f"https://{os.environ['PAT_TOKEN']}@github.com/{os.environ['GH_USERNAME']}/{gh_repo_name}.git"
+                      log_debug(f"Setting up remote for {gh_repo_name}")
+                      
+                      # Add GitHub as remote and push
+                      try:
+                          remote = repo.create_remote('github', remote_url)
+                          log_debug("Created new remote")
+                      except git.exc.GitCommandError:
+                          remote = repo.remote('github')
+                          log_debug("Using existing remote")
+                      
+                      log_debug("Pushing to GitHub...")
+                      remote.push('main')
+                      log_debug(f"Successfully pushed {model_name} to GitHub")
+                  
+                  except Exception as e:
+                      log_debug(f"Error processing model {model_name}: {str(e)}")
+                      log_debug(traceback.format_exc())
+                      continue
+
+          except Exception as e:
+              log_debug(f"Critical error: {str(e)}")
+              log_debug(traceback.format_exc())
+              sys.exit(1)
           EOF
 
       - name: Cleanup
+        if: always()
         run: |
           rm -rf qwen_models
